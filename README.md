@@ -6,10 +6,12 @@ A [Hermes Agent](https://github.com/NousResearch/hermes-agent) skill that bootst
 
 ```text
 /secure-my-profile setup   → create vault + profile
-/secure-my-profile hide    → lock (off the list)
+/secure-my-profile hide    → lock (off the list)  ← password via secure dialog
 /secure-my-profile show    → unlock (back on the list)
 /secure-my-profile status  → is it locked?
 ```
+
+On **Hermes Desktop / TUI**, the password is collected with the built-in **`secret.request`** masked overlay (model never sees it). The CLI then verifies a PBKDF2 hash and **scrubs** `VAULT_PASSWORD` so it is not memorized in `.env`.
 
 > **Platforms:** macOS & Linux · **Python:** 3.10+ (stdlib only) · **Hermes:** profiles under `~/.hermes`
 
@@ -28,7 +30,7 @@ Hermes profiles are great for multi-mission agents, but **there is no built-in w
 | Problem | What this skill does |
 | --- | --- |
 | Profile shows in Desktop / `hermes profile list` | Moves it to `~/.hermes/vault/stashed/` |
-| Password in skill files | Never — only PBKDF2 hash in `vault.env` |
+| Password in skill files / chat / memory | Never — only PBKDF2 hash in `vault.env`; chat uses Hermes secret dialog + one-shot scrub |
 | Personal agent offline while locked | Vault lives on the **default** home so `/secure-my-profile show` still works |
 | Accidental open via `~/.local/bin/<slug>` | Replaces alias with a “locked” stub |
 
@@ -116,6 +118,8 @@ Hermes only lists directories under `profiles/`, so the profile disappears from 
 
 Password: **PBKDF2-HMAC-SHA256**, random 16-byte salt, **600 000** iterations. Compared with `hmac.compare_digest`. Never written to `SKILL.md` by the script.
 
+**Chat path:** skill frontmatter declares `VAULT_PASSWORD` → Hermes Desktop/TUI `secret.request` → env passthrough into `secure_profile.py` → verify → **scrub** env + dotenv. Messaging gateways cannot collect secrets in-band.
+
 ---
 
 ## Commands
@@ -151,11 +155,12 @@ Do **not** put passwords in shell history on shared machines. Prefer interactive
 
 ## Safety rules
 
-1. Always run hide/show from the **default** profile (`hermes profile use default`).
-2. Never put the password in chat, memory, or skill files.
-3. Messaging gateways (Telegram/Discord) are a poor place for password entry — use local TUI/CLI or SSH.
+1. Always run hide/show from a profile that is **not** the secured one (default or another named profile).
+2. Never put the password in normal chat text, memory, ByteRover, or skill files — use the **secure secret dialog** or TTY getpass.
+3. Messaging gateways (Telegram/Discord) cannot use `secret.request` — use Desktop, TUI, or SSH.
 4. Restart **Hermes Desktop** after hide if the UI still shows a cached profile name.
 5. Use a long, unique password.
+6. Expect `VAULT_PASSWORD` to be **absent** from `~/.hermes/.env` after each successful command (one-shot scrub).
 
 ---
 

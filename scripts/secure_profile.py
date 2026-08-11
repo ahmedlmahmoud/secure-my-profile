@@ -3,7 +3,9 @@
 
 Subcommands: setup | status | hide|lock | show|unlock | change-password
 
-Secrets live only as a salted PBKDF2 hash in ~/.hermes/vault/vault.env.
+Durable secrets live only as a salted PBKDF2 hash in ~/.hermes/vault/vault.env.
+One-shot unlock passwords may arrive via VAULT_PASSWORD (Hermes secret.request
+or trusted local env) and are scrubbed from process env + dotenv after each run.
 """
 from __future__ import annotations
 
@@ -32,6 +34,7 @@ from lib.crypto import (  # noqa: E402
     hash_password,
     new_salt,
     prompt_new_password,
+    scrub_password_env,
     verify_against_secrets,
 )
 from lib.paths import (  # noqa: E402
@@ -209,7 +212,20 @@ def cmd_change_password(_args: argparse.Namespace) -> int:
     print("verify current password...")
     verify_against_secrets(load_vault_secrets(root))
     print("set new password...")
-    password = prompt_new_password()
+    # Non-TTY (chat secret capture): require a distinct new secret so we never
+    # re-hash the just-verified current password by accident.
+    if not sys.stdin.isatty():
+        new_pw = os.environ.get("VAULT_NEW_PASSWORD")
+        if not new_pw:
+            die(
+                "set VAULT_NEW_PASSWORD (secure secret dialog) for the new password; "
+                "do not reuse VAULT_PASSWORD as the new value in non-interactive mode"
+            )
+        if len(new_pw) < 8:
+            die("password must be at least 8 characters")
+        password = new_pw
+    else:
+        password = prompt_new_password()
     salt = new_salt()
     digest = hash_password(password, salt)
     del password
@@ -266,10 +282,22 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    root: Path | None = None
+    try:
+        root = default_hermes_home()
+    except Exception:
+        root = None
     try:
         return int(args.func(args) or 0)
     except BrokenPipeError:
         return 0
+    finally:
+        # Always one-shot scrub so Hermes secret.request does not leave the
+        # unlock password sitting in ~/.hermes/.env like a permanent API key.
+        try:
+            scrub_password_env(hermes_home=root)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
