@@ -1,0 +1,8 @@
+{
+  "name": "secure-my-profile",
+  "label": "Secure My Profile",
+  "description": "Password-gated hide/show for a Hermes named profile",
+  "icon": "Lock",
+  "version": "1.0.0",
+  "api": "plugin_api.py"
+}

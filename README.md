@@ -1,228 +1,132 @@
 # secure-my-profile
 
-**Password-hide a Hermes personal profile from TUI & Desktop.**
+Password-gated **hide/show** for one Hermes named profile (default: `personal`).
 
-A [Hermes Agent](https://github.com/NousResearch/hermes-agent) skill that bootstraps a personal profile, stores only a salted password hash, and **moves the profile out of Hermes’ scan path** when locked — so shared shell / Desktop users don’t see it in the profile list.
+**Product = Hermes Python plugin + Desktop plugin.** No skill session. Password is request-scoped (dialog body); durable secret is a PBKDF2 hash in `~/.hermes/vault/vault.env`.
 
-```text
-/secure-my-profile setup   → create vault + profile
-/secure-my-profile hide    → lock (off the list)  ← password via secure dialog
-/secure-my-profile show    → unlock (back on the list)
-/secure-my-profile status  → is it locked?
-```
+| Half | Install path | Role |
+|---|---|---|
+| **Hermes plugin** | `$HERMES_HOME/plugins/secure-my-profile/` | Engine + `/secure-my-profile` slash + REST `plugin_api` |
+| **Desktop plugin** | `$HERMES_HOME/desktop-plugins/secure-my-profile/plugin.js` | ⌘K palette + password dialog → `ctx.rest` |
 
-On **Hermes Desktop / TUI**, the password is collected with the built-in **`secret.request`** masked overlay (model never sees it). The CLI then verifies a PBKDF2 hash and **scrubs** `VAULT_PASSWORD` so it is not memorized in `.env`.
-
-> **Platforms:** macOS & Linux · **Python:** 3.10+ (stdlib only) · **Hermes:** profiles under `~/.hermes`
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-blue)](#)
-[![Hermes](https://img.shields.io/badge/Hermes-skill-purple)](https://github.com/NousResearch/hermes-agent)
+Works with **remote Desktop → remote gateway**: Desktop UI prompts locally; hide/show runs on the VPS via the existing dashboard session.
 
 ---
 
-## Why this exists
-
-Hermes profiles are great for multi-mission agents, but **there is no built-in way to lock or hide a profile** from TUI/Desktop. If family or teammates share the same VPS account, every profile is visible.
-
-`secure-my-profile` is a practical fix for **casual shared access**:
-
-| Problem | What this skill does |
-| --- | --- |
-| Profile shows in Desktop / `hermes profile list` | Moves it to `~/.hermes/vault/stashed/` |
-| Password in skill files / chat / memory | Never — only PBKDF2 hash in `vault.env`; chat uses Hermes secret dialog + one-shot scrub |
-| Personal agent offline while locked | Vault lives on the **default** home so `/secure-my-profile show` still works |
-| Accidental open via `~/.local/bin/<slug>` | Replaces alias with a “locked” stub |
-
-**Not** full multi-user OS isolation or disk encryption. Root (or anyone with full home access) can still open the stash. See [Threat model](#threat-model).
-
----
-
-## Install
-
-### Option A — clone into default Hermes skills (recommended)
-
-The skill must live under the **default** Hermes home so it still works when the personal profile is locked:
+## Install (VPS / Hermes host)
 
 ```bash
-mkdir -p ~/.hermes/skills/security
-git clone https://github.com/ahmedlmahmoud/secure-my-profile.git \
-  ~/.hermes/skills/security/secure-my-profile
-```
-
-Start a **new Hermes session** (or your client’s skill rescan) so `/secure-my-profile` appears.
-
-### Option B — run the CLI directly from a checkout
-
-```bash
+# 1. Clone
 git clone https://github.com/ahmedlmahmoud/secure-my-profile.git
 cd secure-my-profile
-python3 scripts/secure_profile.py setup
-python3 scripts/secure_profile.py status
+
+# 2. Install Python plugin into HERMES_HOME
+export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+mkdir -p "$HERMES_HOME/plugins"
+rsync -a --delete plugins/secure-my-profile/ "$HERMES_HOME/plugins/secure-my-profile/"
+
+# 3. Enable + restart so plugin_api mounts and slash registers
+hermes plugins enable secure-my-profile
+# restart dashboard (API) + gateway (slash)
+systemctl --user restart hermes-dashboard hermes-gateway
+# or however you run them: hermes dashboard / hermes gateway
+```
+
+Confirm in logs:
+```text
+Mounted plugin API routes: /api/plugins/secure-my-profile/
+```
+
+## Install (Desktop machine)
+
+Desktop loads plugins from **`$HERMES_HOME/desktop-plugins/` on the machine running the Desktop app**.
+
+```bash
+export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"   # or your Desktop profile home
+mkdir -p "$HERMES_HOME/desktop-plugins/secure-my-profile"
+cp desktop-plugins/secure-my-profile/plugin.js \
+   "$HERMES_HOME/desktop-plugins/secure-my-profile/plugin.js"
+```
+
+Then in Desktop:
+1. **⌘K → Reload desktop plugins**
+2. Settings → Plugins → **Secure My Profile** on
+3. ⌘K → **Hide / Show personal profile**
+
+If Desktop talks to a **remote** gateway, the Python half must already be installed+enabled on that host (step above). The Desktop half only needs `plugin.js` locally.
+
+### One-host (Desktop + gateway same machine)
+
+```bash
+export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+rsync -a plugins/secure-my-profile/ "$HERMES_HOME/plugins/secure-my-profile/"
+mkdir -p "$HERMES_HOME/desktop-plugins/secure-my-profile"
+cp desktop-plugins/secure-my-profile/plugin.js \
+   "$HERMES_HOME/desktop-plugins/secure-my-profile/plugin.js"
+hermes plugins enable secure-my-profile
+# restart dashboard + gateway, then Desktop: Reload desktop plugins
 ```
 
 ---
 
-## Quick start
+## First-time setup
 
-Run from the **default** Hermes profile (not from inside the personal one):
+If vault is not configured yet:
+- Desktop: ⌘K → **Setup personal profile vault** (password dialog), **or**
+- CLI on host with a real TTY:
+  ```bash
+  hermes  # then /secure-my-profile setup
+  # or:
+  python3 -c "import sys; sys.path.insert(0,'$HERMES_HOME/plugins/secure-my-profile'); import engine; print(engine.setup(password='…'))"
+  ```
 
-```bash
-# 1. Bootstrap (asks for profile slug + password)
-python3 ~/.hermes/skills/security/secure-my-profile/scripts/secure_profile.py setup
+Existing vault from the old skill is reused (`~/.hermes/vault/`). No re-setup needed if `vault.env` already has the hash.
 
-# 2. Confirm it exists
-hermes profile list
+## Daily use
 
-# 3. Lock when you’re done
-python3 ~/.hermes/skills/security/secure-my-profile/scripts/secure_profile.py hide
-hermes profile list          # secured slug should be gone
+| Action | How |
+|---|---|
+| Hide | ⌘K → **Hide personal profile** → password |
+| Show | ⌘K → **Show personal profile** → password |
+| Status | ⌘K chip / `/secure-my-profile status` |
 
-# 4. Unlock to work again
-python3 ~/.hermes/skills/security/secure-my-profile/scripts/secure_profile.py show
-hermes -p personal chat      # or whatever slug you chose
-```
+When hidden, `profiles/personal` is moved to `vault/stashed/personal` so TUI/Desktop stop listing it.
 
-In chat (after skills are loaded):
+## Security model
+
+- **Always re-prompt** — no sticky `secret.request` / parent-env unlock
+- Password only in POST body (Desktop) or getpass (CLI TTY)
+- Durable store: salted PBKDF2-HMAC-SHA256 (600k iters) in `vault/vault.env` (chmod 600)
+- Not full-disk encryption; not multi-user OS isolation
+
+## Slash (plugin handler — no LLM)
 
 ```text
-/secure-my-profile setup
-/secure-my-profile hide
-/secure-my-profile show
 /secure-my-profile status
+/secure-my-profile hide|show     # needs real TTY; prefer Desktop dialog
+/secure-my-profile setup
 /secure-my-profile change-password
 ```
 
----
-
-## How it works
+## API (local dashboard, session-token auth)
 
 ```text
-~/.hermes/
-├── profiles/
-│   └── personal/          ← visible (unlocked)
-├── vault/
-│   ├── config.json        ← non-secret state
-│   ├── vault.env          ← chmod 600 · salt + PBKDF2 hash only
-│   └── stashed/
-│       └── personal/      ← hidden (locked)
-└── skills/security/secure-my-profile/
-    ├── SKILL.md
-    └── scripts/secure_profile.py
+GET  /api/plugins/secure-my-profile/status
+POST /api/plugins/secure-my-profile/hide|show|setup|change-password
 ```
 
-**Hide** = `shutil.move` from `profiles/<slug>` → `vault/stashed/<slug>`  
-**Show** = reverse move after password verify  
+Not a public domain API — routes on the existing Hermes dashboard/gateway.
 
-Hermes only lists directories under `profiles/`, so the profile disappears from TUI/Desktop without patching Hermes core.
-
-Password: **PBKDF2-HMAC-SHA256**, random 16-byte salt, **600 000** iterations. Compared with `hmac.compare_digest`. Never written to `SKILL.md` by the script.
-
-**Chat path:** skill frontmatter declares `VAULT_PASSWORD` → Hermes Desktop/TUI `secret.request` → env passthrough into `secure_profile.py` → verify → **scrub** env + dotenv. Messaging gateways cannot collect secrets in-band.
-
----
-
-## Commands
-
-| Command | Password? | Description |
-| --- | --- | --- |
-| `setup` | set new | Create vault, hash, optional `hermes profile create` |
-| `status` | no | Setup state, visible vs stashed |
-| `hide` / `lock` | yes | Stop gateway (best-effort), move to stash, stub alias |
-| `show` / `unlock` | yes | Restore profile + alias |
-| `change-password` | yes | Rotate hash |
-
-### Setup flags
+## Uninstall
 
 ```bash
-python3 scripts/secure_profile.py setup --slug personal
-python3 scripts/secure_profile.py setup --force              # reconfigure
-python3 scripts/secure_profile.py setup --no-create-profile  # vault only
-python3 scripts/secure_profile.py setup --hide-now           # lock immediately after setup
+hermes plugins disable secure-my-profile   # if available
+rm -rf "$HERMES_HOME/plugins/secure-my-profile"
+rm -rf "$HERMES_HOME/desktop-plugins/secure-my-profile"
+# restart dashboard/gateway; Desktop: Reload desktop plugins
+# vault data left intact under $HERMES_HOME/vault/
 ```
-
-### Non-interactive (local automation only)
-
-```bash
-VAULT_PASSWORD='…' python3 scripts/secure_profile.py hide
-VAULT_PASSWORD='old' VAULT_NEW_PASSWORD='new' \
-  python3 scripts/secure_profile.py change-password
-```
-
-Do **not** put passwords in shell history on shared machines. Prefer interactive TUI.
-
----
-
-## Safety rules
-
-1. Always run hide/show from a profile that is **not** the secured one (default or another named profile).
-2. Never put the password in normal chat text, memory, ByteRover, or skill files — use the **secure secret dialog** or TTY getpass.
-3. Messaging gateways (Telegram/Discord) cannot use `secret.request` — use Desktop, TUI, or SSH.
-4. Restart **Hermes Desktop** after hide if the UI still shows a cached profile name.
-5. Use a long, unique password.
-6. Expect `VAULT_PASSWORD` to be **absent** from `~/.hermes/.env` after each successful command (one-shot scrub).
-
----
-
-## Threat model
-
-**Protects against**
-
-- Casual discovery in TUI / Desktop / `hermes profile list` on a shared account
-- Accidental use of your personal agent by someone who can open the same Hermes UI
-- Plaintext password sitting in the skill repo
-
-**Does not protect against**
-
-- Root or full access to your home directory (stash is still on disk)
-- Offline brute-force of a weak password against `vault.env`
-- Chat logs that show you ran hide/show
-- Malware running as your user
-
-Optional hardening (not included): encrypt the stashed tree with `age` / gocryptfs, or run personal Hermes as a separate Unix user.
-
-Full notes: [`references/security.md`](./references/security.md)
-
----
-
-## Repo layout
-
-```text
-secure-my-profile/
-├── README.md
-├── LICENSE
-├── SKILL.md                 # Hermes skill → slash /secure-my-profile
-├── .gitignore
-├── references/
-│   └── security.md
-└── scripts/
-    ├── secure_profile.py    # CLI entry
-    └── lib/
-        ├── paths.py
-        ├── crypto.py
-        ├── config.py
-        └── profile_ops.py
-```
-
----
-
-## Development
-
-```bash
-python3 scripts/secure_profile.py --help
-python3 scripts/secure_profile.py status   # exit 1 if not set up yet
-```
-
-No third-party Python dependencies. Exercised against real Hermes `profile create` / `list` / move on macOS; same POSIX paths target Linux VPS installs.
-
----
 
 ## License
 
-[MIT](./LICENSE) © [ahmedlmahmoud](https://github.com/ahmedlmahmoud)
-
----
-
-## Credits
-
-Built for [Hermes Agent](https://github.com/NousResearch/hermes-agent) by [ahmedlmahmoud](https://github.com/ahmedlmahmoud).
+MIT — see `LICENSE`.

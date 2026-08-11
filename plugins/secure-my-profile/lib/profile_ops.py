@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .crypto import die
+from .crypto import VaultError, die  # VaultError re-export for callers; die raises it
 from .paths import (
     active_profile_path,
     current_hermes_home,
@@ -101,7 +101,7 @@ def disable_alias(slug: str) -> None:
     stub = (
         "#!/usr/bin/env bash\n"
         f'echo "Profile {slug!r} is locked by secure-my-profile." >&2\n'
-        'echo "Unlock with: /secure-my-profile show  (from default Hermes)" >&2\n'
+        'echo "Unlock with: Desktop ⌘K → Show personal, or /secure-my-profile show" >&2\n'
         "exit 1\n"
     )
     try:

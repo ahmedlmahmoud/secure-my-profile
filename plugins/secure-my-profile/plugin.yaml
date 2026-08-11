@@ -1,0 +1,9 @@
+name: secure-my-profile
+version: "1.0.0"
+description: >-
+  Password-gated hide/show for a Hermes named profile (default: personal).
+  Desktop palette + password dialog; engine runs on the gateway host.
+  No skill session; password never sticks in env.
+provides_commands:
+  - secure-my-profile
+author: dabbo
