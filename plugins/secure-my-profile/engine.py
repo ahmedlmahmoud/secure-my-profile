@@ -46,6 +46,7 @@ from lib.profile_ops import (  # noqa: E402
     create_profile_if_needed,
     disable_alias,
     ensure_not_inside_target,
+    evict_visible_aside,
     move_profile_from_stash,
     move_profile_to_stash,
     normalize_slug,
@@ -157,6 +158,9 @@ def hide(*, password: str) -> dict[str, Any]:
 
     state = profile_state(slug, root)
     if state == "hidden":
+        # Gateway often recreates empty profiles/<slug> while stash holds the real tree.
+        if profile_visible_path(slug, root).exists():
+            evict_visible_aside(slug, root)
         save_config(touch_action(cfg, state="hidden"), root)
         return _ok(profile=slug, state="hidden", message="already hidden")
     if state == "missing":
@@ -166,12 +170,9 @@ def hide(*, password: str) -> dict[str, Any]:
     clear_sticky_if_needed(slug, root)
     move_profile_to_stash(slug, root)
 
-    # Idempotent ghost cleanup: gateway may recreate thin profiles/<slug>/
-    ghost = profile_visible_path(slug, root)
-    if ghost.exists():
-        import shutil
-
-        shutil.rmtree(ghost, ignore_errors=True)
+    # Gateway may recreate profiles/<slug>/ after the move — evict, don't rmtree.
+    if profile_visible_path(slug, root).exists():
+        evict_visible_aside(slug, root)
 
     disable_alias(slug)
     save_config(touch_action(cfg, state="hidden"), root)
@@ -202,18 +203,11 @@ def show(*, password: str) -> dict[str, Any]:
     if state == "missing":
         die(f"profile {slug!r} not found under profiles/ or vault/stashed/", code="missing")
 
-    # Drop thin ghost if gateway recreated profiles/<slug>/ (state.db only).
-    # Real stashed profiles are large; ghosts are tiny.
-    ghost = profile_visible_path(slug, root)
-    if ghost.exists():
-        try:
-            total = sum(f.stat().st_size for f in ghost.rglob("*") if f.is_file())
-            if total < 5_000_000:
-                import shutil
-
-                shutil.rmtree(ghost, ignore_errors=True)
-        except OSError:
-            pass
+    # Stash is the real profile. Any leftover profiles/<slug> is a ghost
+    # (gateway reseed). The old <5MB rmtree missed 6.9MB skill-seeded ghosts
+    # and "already visible" then hid 4 sessions / 329 messages.
+    if profile_visible_path(slug, root).exists():
+        evict_visible_aside(slug, root)
 
     move_profile_from_stash(slug, root)
     restore_alias(slug)

@@ -37,12 +37,39 @@ def normalize_slug(name: str) -> str:
     return name
 
 
+def evict_visible_aside(slug: str, root: Path) -> Path:
+    """Move profiles/<slug> aside as a timestamped ghost backup. Never rmtree."""
+    import time
+
+    src = profile_visible_path(slug, root)
+    if not src.exists():
+        die(f"cannot evict missing visible profile {slug!r}")
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    dest = stashed_dir(root) / f"{slug}.ghost-{stamp}"
+    n = 0
+    while dest.exists():
+        n += 1
+        dest = stashed_dir(root) / f"{slug}.ghost-{stamp}-{n}"
+    stashed_dir(root).mkdir(parents=True, exist_ok=True)
+    print(f"evicting leftover visible {src} -> {dest}")
+    try:
+        shutil.move(str(src), str(dest))
+    except OSError as exc:
+        die(f"ghost evict failed: {exc}")
+    return dest
+
+
 def profile_state(slug: str, root: Path | None = None) -> str:
-    """Return 'visible' | 'hidden' | 'missing'."""
-    if profile_visible_path(slug, root).is_dir():
-        return "visible"
+    """Return 'visible' | 'hidden' | 'missing'.
+
+    Stash is source of truth. If vault/stashed/<slug> exists, state is
+    **hidden** even when profiles/<slug> also exists (gateway often recreates
+    an empty ghost; treating that as visible hid the real sessions).
+    """
     if profile_stashed_path(slug, root).is_dir():
         return "hidden"
+    if profile_visible_path(slug, root).is_dir():
+        return "visible"
     return "missing"
 
 
